@@ -34,6 +34,7 @@ use warnings;
 use strict;
 use Getopt::Long;
 use IO::Socket;
+use Text::ParseWords;
 
 $|=1;
 
@@ -47,9 +48,11 @@ my $bind_ip = undef;
 my $family = 'inet';
 my $port_request = undef;
 
-my $ssh = 'ssh';
+my @ssh = ('ssh');
 
 my $term_init = 1;
+
+my $localhost = undef;
 
 my $help = undef;
 my $version = undef;
@@ -80,6 +83,8 @@ qq{Usage: $0 [options] [--] [user@]host [command...]
                                 (default: "ssh")
 
         --no-init            do not send terminal initialization string
+
+        --local              run mosh-server locally without using ssh
 
         --help               this message
         --version            version and copyright information
@@ -115,8 +120,9 @@ GetOptions( 'client=s' => \$client,
 	    '4' => sub { $family = 'inet' },
 	    '6' => sub { $family = 'inet6' },
 	    'p=s' => \$port_request,
-	    'ssh=s' => \$ssh,
+	    'ssh=s' => sub { @ssh = shellwords($_[1]); },
 	    'init!' => \$term_init,
+	    'local' => \$localhost,
 	    'help' => \$help,
 	    'version' => \$version,
 	    'fake-proxy!' => \my $fake_proxy,
@@ -157,20 +163,34 @@ if ( defined $port_request ) {
 
 delete $ENV{ 'MOSH_PREDICTION_DISPLAY' };
 
+my $userhost;
+my @command;
 my @bind_arguments;
-if ( not defined $bind_ip or $bind_ip =~ m{^ssh$}i ) {
-  push @bind_arguments, '-s';
-} elsif ( $bind_ip =~ m{^any$}i ) {
-  # do nothing
-} elsif ( $bind_ip =~ m{^[0-9\.]+$} ) {
-  push @bind_arguments, ('-i', "$bind_ip");
+
+if ( ! defined $fake_proxy ) {
+  if ( scalar @ARGV < 1 ) {
+    die $usage;
+  }
+  $userhost = shift;
+  @command = @ARGV;
+  if ( not defined $bind_ip or $bind_ip =~ m{^ssh$}i ) {
+    if ( not defined $localhost ) {
+      push @bind_arguments, '-s';
+    } else {
+      push @bind_arguments, ('-i', "$userhost");
+    }
+  } elsif ( $bind_ip =~ m{^any$}i ) {
+    # do nothing
+  } elsif ( $bind_ip =~ m{^[0-9\.]+$} ) {
+    push @bind_arguments, ('-i', "$bind_ip");
+  } else {
+    print STDERR qq{$0: Unknown server binding option: $bind_ip\n};
+
+    die $usage;
+  }
 } else {
-  print STDERR qq{$0: Unknown server binding option: $bind_ip\n};
+  my ( $host, $port ) = @ARGV;
 
-  die $usage;
-}
-
-if ( defined $fake_proxy ) {
   use Errno qw(EINTR);
   my $have_ipv6 = eval {
       require IO::Socket::IP;
@@ -188,8 +208,6 @@ if ( defined $fake_proxy ) {
 		die "$0: IPv6 sockets not available in this Perl install\n";
 	}
   }
-
-  my ( $host, $port ) = @ARGV;
 
   # Resolve hostname and connect
   my $afstr = 'AF_' . uc( $family );
@@ -231,13 +249,6 @@ if ( defined $fake_proxy ) {
   exit;
 }
 
-if ( scalar @ARGV < 1 ) {
-  die $usage;
-}
-
-my $userhost = shift;
-my @command = @ARGV;
-
 # Count colors
 open COLORCOUNT, '-|', $client, ('-c') or die "Can't count colors: $!\n";
 my $colors = "";
@@ -278,8 +289,15 @@ if ( $pid == 0 ) { # child
     push @server, '--', @command;
   }
 
+  if ( defined( $localhost )) {
+    delete $ENV{ 'SSH_CONNECTION' };
+    chdir; # $HOME
+    print "MOSH IP ${userhost}\n";
+    exec( $server, @server );
+    die "Cannot exec $server: $!\n";
+  }
   my $quoted_self = shell_quote( $0, "--family=$family" );
-  exec "$ssh " . shell_quote( '-S', 'none', '-o', "ProxyCommand=$quoted_self --fake-proxy -- %h %p", '-n', '-tt', $userhost, '--', "$server " . shell_quote( @server ) );
+  exec @ssh, '-S', 'none', '-o', "ProxyCommand=$quoted_self --fake-proxy -- %h %p", '-n', '-tt', $userhost, '--', "$server " . shell_quote( @server );
   die "Cannot exec ssh: $!\n";
 } else { # parent
   my ( $ip, $port, $key );

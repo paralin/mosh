@@ -407,7 +407,7 @@ bool STMClient::process_resize( void )
   return true;
 }
 
-void STMClient::main( void )
+bool STMClient::main( void )
 {
   /* initialize signal handling and structures */
   main_init();
@@ -478,7 +478,7 @@ void STMClient::main( void )
 
       if ( sel.signal( SIGWINCH ) ) {
         /* resize */
-        if ( !process_resize() ) { return; }
+        if ( !process_resize() ) { return false; }
       }
 
       if ( sel.signal( SIGCONT ) ) {
@@ -571,5 +571,6 @@ void STMClient::main( void )
       }
     }
   }
+  return clean_shutdown;
 }
 

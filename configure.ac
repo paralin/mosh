@@ -23,7 +23,7 @@ m4_ifdef([AM_PROG_AR], [AM_PROG_AR])
 WARNING_CXXFLAGS=""
 PICKY_CXXFLAGS=""
 AC_ARG_ENABLE([compile-warnings],
-  [AS_HELP_STRING([--enable-compile-warnings@<:@=no/yes/maximum/error@:>@],
+  [AS_HELP_STRING([--enable-compile-warnings@<:@=no/yes/maximum/error/distcheck@:>@],
      [Turn on compiler warnings])],
   [case "$enableval" in
      no)
@@ -37,6 +37,14 @@ AC_ARG_ENABLE([compile-warnings],
        ;;
      error)
        WARNING_CXXFLAGS="-Wall -Werror"
+       PICKY_CXXFLAGS="-Wextra -pedantic -Wno-long-long -Weffc++ -Wmissing-declarations"
+       ;;
+     distcheck)
+       if test "$(uname -s)" = Linux; then
+         WARNING_CXXFLAGS="-Wall -Werror"
+       else
+         WARNING_CXXFLAGS="-Wall"
+       fi
        PICKY_CXXFLAGS="-Wextra -pedantic -Wno-long-long -Weffc++ -Wmissing-declarations"
        ;;
      *)
@@ -243,8 +251,6 @@ AC_CHECK_FUNCS(m4_normalize([
 
 AC_SEARCH_LIBS([clock_gettime], [rt], [AC_DEFINE([HAVE_CLOCK_GETTIME], [1], [Define if clock_gettime is available.])])
 
-PKG_CHECK_MODULES([OPENSSL], [openssl])
-
 # Start by trying to find the needed tinfo parts by pkg-config
 PKG_CHECK_MODULES([TINFO], [tinfo],
   [AC_DEFINE([HAVE_CURSES_H], [1], [Define to 1 if <curses.h> is present])],
@@ -284,6 +290,49 @@ if test "x$ax_cv_have_TINFO" = xno ; then
         AC_SUBST([TINFO_CFLAGS], ["$CURSES_CPPFLAGS"])
     fi
 fi
+
+dnl Default to OpenSSL, or OS X crypto library if found
+AC_CHECK_HEADERS([CommonCrypto/CommonCrypto.h],
+  [default_crypto_library="apple-common-crypto"],
+  [default_crypto_library="openssl"]
+)
+
+dnl Allow user to select over the default.
+AC_ARG_WITH(
+  [crypto-library],
+  [AS_HELP_STRING([--with-crypto-library=library], [build with the given crypto library, TYPE=openssl|nettle|apple-common-crypto @<:@default=openssl@:>@])],
+  [
+    case "${withval}" in
+      openssl|nettle|apple-common-crypto) ;;
+      *) AC_MSG_ERROR([bad value ${withval} for --with-crypto-library]) ;;
+    esac
+  ],
+  [with_crypto_library="$default_crypto_library"]
+)
+
+dnl Checks for chosen crypto library
+case "${with_crypto_library}" in
+  openssl)
+    PKG_CHECK_MODULES([CRYPTO], [openssl],
+      [],
+      [AC_MSG_ERROR([OpenSSL crypto library not found])])
+    AC_DEFINE([USE_OPENSSL_AES], [1], [Use OpenSSL library])
+    ;;
+  nettle)
+    PKG_CHECK_MODULES([CRYPTO], [nettle],
+      [],
+      [AC_MSG_ERROR([Nettle crypto library not found])])
+    AC_DEFINE([USE_NETTLE_AES], [1], [Use Nettle library])
+    ;;
+  apple-common-crypto)
+    dnl Common Crypto is in Apple's standard paths and base libraries.
+    dnl So just check for presence of the header.
+    AC_CHECK_HEADERS([CommonCrypto/CommonCrypto.h],
+      [],
+      [AC_MSG_ERROR([Apple Common Crypto header not found])])
+    AC_DEFINE([USE_APPLE_COMMON_CRYPTO_AES], [1], [Use Apple Common Crypto library])
+    ;;
+esac
 
 AC_CHECK_DECL([forkpty],
   [AC_DEFINE([FORKPTY_IN_LIBUTIL], [1],
